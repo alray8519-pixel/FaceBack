@@ -18,14 +18,45 @@ let activeChatUser = null;
 let authMode = 'login';
 let selectedAvatarBase64 = null;
 
-// توليد كود عشوائي مكون من 4 أرقام يختلف تماماً عن 0000
+// توليد كود عشوائي مكون من 4 أرقام يختلف تماماً عن 0000 و0001
 function generateUniqueCode() {
   let code;
   do {
     code = Math.floor(1000 + Math.random() * 9000).toString();
-  } while (code === '0000');
+  } while (code === '0000' || code === '0001');
   return code;
 }
+
+// إنشاء حساب الآدمين تلقائياً إذا لم يكن موجوداً
+function ensureAdminAccount() {
+  const adminEmail = "admen01@faceback.com";
+  const adminPass = "000000";
+
+  auth.signInWithEmailAndPassword(adminEmail, adminPass)
+    .then(cred => {
+      // إعداد بيانات الآدمين في Firestore
+      return db.collection('users').doc(cred.user.uid).set({
+        name: 'admen01 (المطور)',
+        email: adminEmail,
+        code: '0001',
+        avatar: 'https://via.placeholder.com/100/2ecc71/ffffff?text=Admin'
+      }, { merge: true });
+    })
+    .catch(error => {
+      // إذا لم يكن الحساب موجوداً، يتم إنشاؤه
+      if (error.code === 'auth/user-not-found') {
+        auth.createUserWithEmailAndPassword(adminEmail, adminPass).then(cred => {
+          return db.collection('users').doc(cred.user.uid).set({
+            name: 'admen01 (المطور)',
+            email: adminEmail,
+            code: '0001',
+            avatar: 'https://via.placeholder.com/100/2ecc71/ffffff?text=Admin'
+          });
+        });
+      }
+    });
+}
+ensureAdminAccount();
 
 // متابعة حالة التسجيل
 auth.onAuthStateChanged(user => {
@@ -59,11 +90,16 @@ function switchAuthTab(mode) {
 // تنفيذ أمان الدخول
 function handleAuth(e) {
   e.preventDefault();
-  const email = document.getElementById('authEmail').value;
+  let email = document.getElementById('authEmail').value.trim();
   const password = document.getElementById('authPassword').value;
 
+  // تسهيل إدخال اسم الحساب admen01 فقط بدون تكملة البريد
+  if (email.toLowerCase() === 'admen01') {
+    email = 'admen01@faceback.com';
+  }
+
   if (authMode === 'signup') {
-    const name = document.getElementById('authName').value;
+    const name = document.getElementById('authName').value.trim();
     auth.createUserWithEmailAndPassword(email, password).then(cred => {
       const generatedCode = generateUniqueCode();
       const defaultAvatar = 'https://via.placeholder.com/100';
@@ -75,15 +111,14 @@ function handleAuth(e) {
       });
     }).catch(err => alert(err.message));
   } else {
-    auth.signInWithEmailAndPassword(email, password).catch(err => alert(err.message));
+    auth.signInWithEmailAndPassword(email, password).catch(err => alert('خطأ في التسجيل: ' + err.message));
   }
 }
 
-// تحميل بيانات الملف الشخصي وعرضها بشكل صحيح
+// تحميل بيانات الملف الشخصي
 function loadUserData() {
   if (!currentUser) return;
 
-  // إدراج البريد الإلكتروني الافتراضي المأخوذ من Firebase Auth
   document.getElementById('profileEmailInput').value = currentUser.email || '';
 
   db.collection('users').doc(currentUser.uid).get().then(doc => {
@@ -93,7 +128,6 @@ function loadUserData() {
       const userAvatar = data.avatar || 'https://via.placeholder.com/100';
       const userName = data.name || currentUser.email.split('@')[0];
 
-      // تعبئة عناصر الواجهة بالبيانات الصحيحة
       document.getElementById('myCode').innerText = userCode;
       document.getElementById('myAvatar').src = userAvatar;
       document.getElementById('profileImage').src = userAvatar;
@@ -101,13 +135,11 @@ function loadUserData() {
       document.getElementById('profileEmailInput').value = data.email || currentUser.email;
       document.getElementById('profileCodeInput').value = userCode;
 
-      // تحديث البيانات إذا كان الكود غير مسجل من قبل
       if (!data.code) {
         db.collection('users').doc(currentUser.uid).set({ code: userCode }, { merge: true });
       }
     } else {
-      // إنشاء مستند المستخدم فورياً إذا لم يوجد
-      const newCode = generateUniqueCode();
+      const newCode = (currentUser.email === 'admen01@faceback.com') ? '0001' : generateUniqueCode();
       const defaultData = {
         name: currentUser.email.split('@')[0],
         email: currentUser.email,
@@ -176,35 +208,43 @@ function switchTab(tabName) {
   }
 }
 
-// تحميل المحادثات السابقة
-function loadChats() {
-  const chatsList = document.getElementById('chatsList');
-  if(!chatsList) return;
-  chatsList.innerHTML = '<p style="text-align:center; padding:10px; color:var(--text-muted)">لا توجد محادثات نشطة</p>';
-}
-
-// البحث عن أصدقاء بواسطة الكود
+// البحث الصحيح عن الأصدقاء بواسطة الكود وإضافتهم
 function searchAndAddFriend() {
-  const code = document.getElementById('friendCodeInput').value.trim();
-  if(code.length !== 4) return alert('الكود يجب أن يتكون من 4 أرقام');
+  const inputEl = document.getElementById('friendCodeInput');
+  const code = inputEl.value.trim();
+  
+  if(code.length !== 4) {
+    alert('الكود يجب أن يتكون من 4 أرقام بالضبط');
+    return;
+  }
 
-  db.collection('users').where('code', '==', code).get().then(snap => {
-    if(snap.empty) {
-      alert('لم يتم العثور على مستخدم بهذا الكود');
-    } else {
-      snap.forEach(doc => {
-        if(doc.id === currentUser.uid) {
-          alert('هذا الكود خاص بحسابك الحالي!');
-          return;
-        }
-        const friend = doc.data();
-        openChatWithUser(doc.id, friend.name, friend.avatar);
-      });
-    }
-  });
+  // الاستعلام من قاعدة البيانات عن المستخدم صاحب الكود
+  db.collection('users').where('code', '==', code).get()
+    .then(snap => {
+      if(snap.empty) {
+        alert('لم يتم العثور على أي مستخدم بهذا الكود (' + code + ')');
+      } else {
+        let found = false;
+        snap.forEach(doc => {
+          if(doc.id === currentUser.uid) {
+            alert('هذا الكود ينتمي لملفك الشخصي الحالي!');
+            found = true;
+            return;
+          }
+          const friend = doc.data();
+          found = true;
+          alert('تم العثور على الصديق: ' + (friend.name || 'مستخدم'));
+          openChatWithUser(doc.id, friend.name || 'مستخدم', friend.avatar || 'https://via.placeholder.com/40');
+        });
+        inputEl.value = '';
+      }
+    })
+    .catch(err => {
+      alert('حدث خطأ في عملية البحث: ' + err.message);
+    });
 }
 
-// فتح محادثة
+// فتح المحادثة المباشرة مع الصديق
 function openChatWithUser(userId, name, avatar) {
   activeChatUser = { id: userId, name: name, avatar: avatar || 'https://via.placeholder.com/40' };
   document.getElementById('noChatSelected').style.display = 'none';
@@ -246,6 +286,8 @@ function handleKeyPress(e) {
 // قراءة الرسائل فورياً
 function loadMessages() {
   const container = document.getElementById('messagesContainer');
+  if (!activeChatUser) return;
+
   db.collection('messages')
     .orderBy('timestamp', 'asc')
     .onSnapshot(snap => {
@@ -265,25 +307,14 @@ function loadMessages() {
     });
 }
 
-// التعامل مع رفع الملفات في الشات
-function handleFileUpload(e) {
-  const file = e.target.files[0];
-  if(!file || !activeChatUser) return;
-
-  const reader = new FileReader();
-  reader.onload = function(event) {
-    const msgData = {
-      sender: currentUser.uid,
-      receiver: activeChatUser.id,
-      text: `<img src="${event.target.result}" style="max-width:200px; border-radius:8px;">`,
-      timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    };
-    db.collection('messages').add(msgData);
-  };
-  reader.readAsDataURL(file);
+// تحميل قوائم المحادثات
+function loadChats() {
+  const chatsList = document.getElementById('chatsList');
+  if(!chatsList) return;
+  chatsList.innerHTML = '<p style="text-align:center; padding:10px; color:var(--text-muted)">يمكنك إضافة أصدقاء للبدء عبر الكود الخاص بهم</p>';
 }
 
-// نسخ الكود
+// نسخ الكود الخاص
 function copyCode() {
   const code = document.getElementById('myCode').innerText;
   navigator.clipboard.writeText(code);
